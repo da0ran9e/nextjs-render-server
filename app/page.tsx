@@ -2,12 +2,7 @@
 
 import { useEffect, useRef } from 'react';
 
-// Ảnh lấy từ folder "album" trên Google Drive (đồng bộ thủ công).
-// Thêm ảnh mới: bổ sung { id, title } vào mảng dưới đây.
-const ALBUM: { id: string; title: string }[] = [
-  { id: '1Fqi0zOLVGN9fzMg9YtY2pOC3u7q-WyfN', title: 'IMG_4116' },
-  { id: '1wYj-b5adY_woFDeDqwGdPBJDAT6hdVNV', title: 'IMG_2465' },
-];
+type Photo = { url: string; title?: string };
 
 export default function Home() {
   const mountRef = useRef<HTMLDivElement>(null);
@@ -19,10 +14,12 @@ export default function Home() {
     let renderer: any = null;
     let onResize: (() => void) | null = null;
     let cleanupPointer: (() => void) | null = null;
+    let cancelled = false;
 
-    function start() {
+    function startWithAlbum(album: Photo[]) {
       const THREE = (window as any).THREE;
-      if (!THREE || !mount) return;
+      if (!THREE || !mount || cancelled) return;
+      if (!album.length) return;
 
       let width = mount.clientWidth || window.innerWidth;
       let height = mount.clientHeight || 480;
@@ -38,7 +35,7 @@ export default function Home() {
       const group = new THREE.Group();
       scene.add(group);
 
-      const N = Math.max(ALBUM.length, 1);
+      const N = Math.max(album.length, 1);
       const radius = Math.max(3.4, N * 0.62);
       camera.position.set(0, 0, radius + 3.4);
       camera.lookAt(0, 0, 0);
@@ -47,9 +44,8 @@ export default function Home() {
       loader.setCrossOrigin('anonymous');
       const H = 1.9;
 
-      ALBUM.forEach((item, i) => {
+      album.forEach((item, i) => {
         const a = (i / N) * Math.PI * 2;
-        // khung nền cho ảnh
         const frame = new THREE.Mesh(
           new THREE.PlaneGeometry(H * 0.78 + 0.12, H + 0.12),
           new THREE.MeshBasicMaterial({ color: 0x1b2333, side: THREE.DoubleSide })
@@ -60,13 +56,12 @@ export default function Home() {
         );
         mesh.position.z = 0.01;
         frame.add(mesh);
-
         frame.position.set(radius * Math.sin(a), 0, radius * Math.cos(a));
         frame.rotation.y = a;
         group.add(frame);
 
         loader.load(
-          `/photo?id=${item.id}`,
+          item.url,
           (tex: any) => {
             tex.anisotropy = renderer.capabilities.getMaxAnisotropy
               ? renderer.capabilities.getMaxAnisotropy()
@@ -87,7 +82,6 @@ export default function Home() {
         );
       });
 
-      // Tương tác: kéo để xoay + tự xoay nhẹ
       let targetRot = 0;
       let curRot = 0;
       let dragging = false;
@@ -103,12 +97,11 @@ export default function Home() {
         lastInteract = Date.now();
       };
       const onUp = () => { dragging = false; };
-
       const md = (e: MouseEvent) => onDown(e.clientX);
       const mm = (e: MouseEvent) => onMove(e.clientX);
       const mu = () => onUp();
       const td = (e: TouchEvent) => onDown(e.touches[0].clientX);
-      const tm = (e: TouchEvent) => { onMove(e.touches[0].clientX); };
+      const tm = (e: TouchEvent) => onMove(e.touches[0].clientX);
       const tu = () => onUp();
       el.addEventListener('mousedown', md);
       window.addEventListener('mousemove', mm);
@@ -126,9 +119,7 @@ export default function Home() {
       };
 
       const animate = () => {
-        if (!dragging && Date.now() - lastInteract > 1200) {
-          targetRot += 0.0016;
-        }
+        if (!dragging && Date.now() - lastInteract > 1200) targetRot += 0.0016;
         curRot += (targetRot - curRot) * 0.08;
         group.rotation.y = curRot;
         renderer.render(scene, camera);
@@ -147,9 +138,8 @@ export default function Home() {
       window.addEventListener('resize', onResize);
     }
 
-    if ((window as any).THREE) {
-      start();
-    } else {
+    function ensureThree(cb: () => void) {
+      if ((window as any).THREE) return cb();
       let script = document.querySelector('script[data-three]') as HTMLScriptElement | null;
       if (!script) {
         script = document.createElement('script');
@@ -157,10 +147,19 @@ export default function Home() {
         script.setAttribute('data-three', 'true');
         document.body.appendChild(script);
       }
-      script.addEventListener('load', start);
+      script.addEventListener('load', cb);
     }
 
+    // Lấy danh sách ảnh động từ server, rồi dựng gallery
+    fetch('/album')
+      .then((r) => r.json())
+      .then((album: Photo[]) => {
+        ensureThree(() => startWithAlbum(Array.isArray(album) ? album : []));
+      })
+      .catch(() => ensureThree(() => startWithAlbum([])));
+
     return () => {
+      cancelled = true;
       if (frameId) cancelAnimationFrame(frameId);
       if (onResize) window.removeEventListener('resize', onResize);
       if (cleanupPointer) cleanupPointer();
@@ -199,23 +198,18 @@ export default function Home() {
           marginBottom: 14,
         }}
       >
-        Album 3D • Next.js server • ảnh từ Google Drive
+        Album 3D • Next.js server • Supabase
       </div>
       <h1 style={{ fontSize: 'clamp(28px, 5vw, 44px)', fontWeight: 800, margin: '0 0 6px' }}>
         Album ảnh của tôi
       </h1>
       <p style={{ color: '#9aa6b8', maxWidth: 560, margin: '0 0 8px' }}>
-        Kéo chuột (hoặc vuốt) để xoay vòng ảnh. Ảnh được server lấy trực tiếp từ Google Drive.
+        Kéo chuột (hoặc vuốt) để xoay vòng ảnh. Ảnh được server lấy động từ kho lưu trữ.
       </p>
 
       <div
         ref={mountRef}
-        style={{
-          width: 'min(960px, 96vw)',
-          height: '70vh',
-          minHeight: 420,
-          cursor: 'grab',
-        }}
+        style={{ width: 'min(960px, 96vw)', height: '70vh', minHeight: 420, cursor: 'grab' }}
       />
     </main>
   );
