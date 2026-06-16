@@ -1,11 +1,42 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 type Photo = { url: string; title?: string };
 
 export default function Home() {
   const mountRef = useRef<HTMLDivElement>(null);
+
+  // Upload UI state
+  const [panelOpen, setPanelOpen] = useState(false);
+  const [passcode, setPasscode] = useState('');
+  const [file, setFile] = useState<File | null>(null);
+  const [status, setStatus] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  async function doUpload() {
+    if (!file) { setStatus('Hãy chọn một ảnh.'); return; }
+    if (!passcode) { setStatus('Nhập mật khẩu.'); return; }
+    setBusy(true);
+    setStatus('Đang tải lên...');
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      fd.append('passcode', passcode);
+      const r = await fetch('/album/upload', { method: 'POST', body: fd });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        setStatus(j.error || 'Tải lên thất bại.');
+        setBusy(false);
+        return;
+      }
+      setStatus('Thành công! Đang làm mới...');
+      setTimeout(() => window.location.reload(), 900);
+    } catch {
+      setStatus('Lỗi mạng.');
+      setBusy(false);
+    }
+  }
 
   useEffect(() => {
     const SRC = 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js';
@@ -150,7 +181,6 @@ export default function Home() {
       script.addEventListener('load', cb);
     }
 
-    // Lấy danh sách ảnh động từ server, rồi dựng gallery
     fetch('/album')
       .then((r) => r.json())
       .then((album: Photo[]) => {
@@ -170,9 +200,22 @@ export default function Home() {
     };
   }, []);
 
+  const inputStyle: React.CSSProperties = {
+    width: '100%',
+    padding: '10px 12px',
+    borderRadius: 8,
+    border: '1px solid rgba(255,255,255,0.15)',
+    background: 'rgba(255,255,255,0.06)',
+    color: '#e8edf5',
+    fontSize: 14,
+    marginTop: 8,
+    boxSizing: 'border-box',
+  };
+
   return (
     <main
       style={{
+        position: 'relative',
         minHeight: '100vh',
         margin: 0,
         background: 'radial-gradient(1200px circle at 50% -10%, #1e293b, #0b0f17 60%)',
@@ -185,6 +228,81 @@ export default function Home() {
         textAlign: 'center',
       }}
     >
+      {/* Upload button */}
+      <button
+        onClick={() => { setPanelOpen((v) => !v); setStatus(''); }}
+        style={{
+          position: 'absolute',
+          top: 18,
+          right: 18,
+          padding: '10px 16px',
+          borderRadius: 999,
+          border: '1px solid rgba(255,255,255,0.15)',
+          background: 'rgba(255,255,255,0.08)',
+          color: '#e8edf5',
+          fontSize: 14,
+          fontWeight: 600,
+          cursor: 'pointer',
+          backdropFilter: 'blur(8px)',
+        }}
+      >
+        ＋ Tải ảnh
+      </button>
+
+      {panelOpen && (
+        <div
+          style={{
+            position: 'absolute',
+            top: 64,
+            right: 18,
+            width: 280,
+            padding: 16,
+            borderRadius: 14,
+            border: '1px solid rgba(255,255,255,0.12)',
+            background: 'rgba(17,23,38,0.95)',
+            boxShadow: '0 12px 40px rgba(0,0,0,0.5)',
+            textAlign: 'left',
+            zIndex: 10,
+          }}
+        >
+          <div style={{ fontWeight: 700, fontSize: 15 }}>Tải ảnh lên album</div>
+          <input
+            type="password"
+            placeholder="Mật khẩu"
+            value={passcode}
+            onChange={(e) => setPasscode(e.target.value)}
+            style={inputStyle}
+          />
+          <input
+            type="file"
+            accept="image/*"
+            onChange={(e) => setFile(e.target.files && e.target.files[0] ? e.target.files[0] : null)}
+            style={{ ...inputStyle, padding: '8px' }}
+          />
+          <button
+            onClick={doUpload}
+            disabled={busy}
+            style={{
+              width: '100%',
+              marginTop: 12,
+              padding: '10px 12px',
+              borderRadius: 8,
+              border: 'none',
+              background: busy ? '#3730a3' : 'linear-gradient(90deg,#6366f1,#22d3ee)',
+              color: '#06121a',
+              fontWeight: 700,
+              fontSize: 14,
+              cursor: busy ? 'default' : 'pointer',
+            }}
+          >
+            {busy ? 'Đang tải...' : 'Tải lên'}
+          </button>
+          {status && (
+            <div style={{ marginTop: 10, fontSize: 13, color: '#9aa6b8' }}>{status}</div>
+          )}
+        </div>
+      )}
+
       <div
         style={{
           display: 'inline-flex',
@@ -204,7 +322,7 @@ export default function Home() {
         Album ảnh của tôi
       </h1>
       <p style={{ color: '#9aa6b8', maxWidth: 560, margin: '0 0 8px' }}>
-        Kéo chuột (hoặc vuốt) để xoay vòng ảnh. Ảnh được server lấy động từ kho lưu trữ.
+        Kéo chuột (hoặc vuốt) để xoay vòng ảnh. Bấm “Tải ảnh” để thêm ảnh mới.
       </p>
 
       <div
