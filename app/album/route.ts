@@ -35,7 +35,7 @@ export async function GET() {
         const out = (Array.isArray(items) ? items : [])
           .filter((it: any) => it && it.name && (IMG_RE.test(it.name) || VID_RE.test(it.name)))
           .map((it: any) => ({
-            url: `${base}/storage/v1/object/public/${bucket}/${encodeURIComponent(it.name)}`,
+            url: `/media?name=${encodeURIComponent(it.name)}`,
             title: it.name,
             type: VID_RE.test(it.name) ? 'video' : 'image',
           }));
