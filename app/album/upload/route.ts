@@ -43,8 +43,8 @@ export async function POST(req: NextRequest) {
   }
 
   const ext = (file.name.split('.').pop() || 'jpg').toLowerCase().replace(/[^a-z0-9]/g, '');
-  if (isVideo && !['mp4', 'webm', 'm4v', 'ogv'].includes(ext)) {
-    return Response.json({ error: 'Video nên là MP4/WebM/M4V để chạy ổn trên trình duyệt.' }, { status: 400 });
+  if (isVideo && !['mp4', 'webm', 'mov', 'm4v', 'ogv'].includes(ext)) {
+    return Response.json({ error: 'Video nên là MP4/MOV/WebM/M4V để chạy ổn trên trình duyệt.' }, { status: 400 });
   }
   const safeName = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext || 'jpg'}`;
   const buf = await file.arrayBuffer();

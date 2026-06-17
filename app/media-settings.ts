@@ -1,7 +1,7 @@
 export type MediaKind = 'image' | 'video';
 
 export const IMG_RE = /\.(jpe?g|png|webp|gif|avif|bmp)$/i;
-export const VID_RE = /\.(mp4|webm|m4v|ogv)$/i;
+export const VID_RE = /\.(mp4|webm|mov|m4v|ogv)$/i;
 
 function envInt(name: string, fallback: number, min: number, max: number) {
   const raw = process.env[name];

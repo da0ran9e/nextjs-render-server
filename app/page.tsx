@@ -17,7 +17,7 @@ function isHeic(f: File) {
 
 function isBrowserVideo(f: File) {
   const n = f.name.toLowerCase();
-  return n.endsWith('.mp4') || n.endsWith('.webm') || n.endsWith('.m4v') || n.endsWith('.ogv');
+  return n.endsWith('.mp4') || n.endsWith('.webm') || n.endsWith('.mov') || n.endsWith('.m4v') || n.endsWith('.ogv');
 }
 
 function ensureHeicLib(): Promise<void> {
@@ -61,7 +61,7 @@ export default function Home() {
       try {
         const prepared = await convertIfNeeded(f);
         if (prepared.type.startsWith('video/') && !isBrowserVideo(prepared)) {
-          errs.push(`${f.name}: video nên đổi sang MP4/WebM để chạy ổn trên trình duyệt`);
+          errs.push(`${f.name}: video nên là MP4/MOV/WebM để chạy ổn trên trình duyệt`);
           continue;
         }
         const fd = new FormData();
@@ -349,7 +349,7 @@ export default function Home() {
         >
           <div style={{ fontWeight: 700, fontSize: 15 }}>Tải lên album</div>
           <div style={{ fontSize: 12, color: '#9aa6b8', marginTop: 4 }}>
-            Chọn nhiều tệp được. Ảnh iPhone (HEIC) sẽ tự đổi sang JPG. Video (.mp4) vào vòng ngoài.
+            Chọn nhiều tệp được. Ảnh iPhone (HEIC) sẽ tự đổi sang JPG. Video (.mp4/.mov) vào vòng ngoài.
           </div>
           <input
             type="password"
@@ -360,7 +360,7 @@ export default function Home() {
           />
           <input
             type="file"
-            accept="image/*,video/mp4,video/webm,.mp4,.webm,.m4v,.ogv,.heic,.heif,.pvt"
+            accept="image/*,video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm,.m4v,.ogv,.heic,.heif,.pvt"
             multiple
             onChange={(e) => setFiles(e.target.files ? Array.from(e.target.files) : [])}
             style={{ ...inputStyle, padding: '8px' }}
