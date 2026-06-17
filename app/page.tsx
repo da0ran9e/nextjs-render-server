@@ -180,8 +180,14 @@ export default function Home() {
       renderer.setSize(width, height);
       mount.appendChild(renderer.domElement);
 
-      const group = new THREE.Group();
-      scene.add(group);
+      const imageSpin = new THREE.Group();
+      const videoTiltGroup = new THREE.Group();
+      const videoSpin = new THREE.Group();
+      videoTiltGroup.rotation.x = 0.18;
+      videoTiltGroup.rotation.z = -0.06;
+      videoTiltGroup.add(videoSpin);
+      scene.add(imageSpin);
+      scene.add(videoTiltGroup);
 
       const nImg = Math.max(images.length, 1);
       const r1 = Math.max(3.0, nImg * 0.5);
@@ -189,16 +195,12 @@ export default function Home() {
       camera.lookAt(0, 0, 0);
 
       // Vòng trong: ảnh (view chính, hướng ra ngoài như hiện tại)
-      if (images.length) addRing(THREE, group, images, r1, 1.9, false);
+      if (images.length) addRing(THREE, imageSpin, images, r1, 1.9, false);
 
-      // Vòng ngoài: video — bán kính lớn hơn, ở phía sau, to hơn một chút
+      // Vòng ngoài: video có group nghiêng riêng, còn spin group quay quanh trục của chính vòng video.
       if (videos.length) {
-        const videoGroup = new THREE.Group();
-        videoGroup.rotation.x = 0.18;
-        videoGroup.rotation.z = -0.06;
-        group.add(videoGroup);
         const r2 = Math.max(r1 + 6, videos.length * 0.85, r1 * 1.8);
-        addRing(THREE, videoGroup, videos, r2, 5.6, true);
+        addRing(THREE, videoSpin, videos, r2, 7.2, true);
       }
 
       let targetRot = 0;
@@ -240,7 +242,8 @@ export default function Home() {
       const animate = () => {
         if (!dragging && Date.now() - lastInteract > 1200) targetRot += 0.0016;
         curRot += (targetRot - curRot) * 0.08;
-        group.rotation.y = curRot;
+        imageSpin.rotation.y = curRot;
+        videoSpin.rotation.y = curRot;
         renderer.render(scene, camera);
         frameId = requestAnimationFrame(animate);
       };
