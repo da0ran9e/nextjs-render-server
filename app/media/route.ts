@@ -1,6 +1,7 @@
 import { spawn } from 'child_process';
 import { createHash, randomUUID } from 'crypto';
 import { mkdir, readFile, unlink, writeFile } from 'fs/promises';
+import { createRequire } from 'module';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { NextRequest } from 'next/server';
@@ -13,6 +14,7 @@ export const runtime = 'nodejs';
 const RAW_CACHE = 'public, max-age=3600';
 const RENDER_CACHE = 'public, max-age=31536000, immutable';
 const SAFE_ORIGINAL_NAME_RE = /^[\w.\- ]+$/;
+const requireFromRoute = createRequire(import.meta.url);
 
 function storagePath(path: string) {
   return path.split('/').map(encodeURIComponent).join('/');
@@ -153,6 +155,15 @@ function runFfmpeg(command: string, args: string[], timeoutMs: number) {
   });
 }
 
+function ffmpegPath() {
+  try {
+    return requireFromRoute('ffmpeg-static') as string | null;
+  } catch (e: any) {
+    console.warn('Album video optimization cannot load ffmpeg-static:', e?.message || e);
+    return null;
+  }
+}
+
 async function optimizedVideo(base: string, bucket: string, serviceKey: string | undefined, name: string) {
   const settings = mediaSettings();
   const path = cacheName(name, settings.videoProfile, 'mp4');
@@ -160,9 +171,8 @@ async function optimizedVideo(base: string, bucket: string, serviceKey: string |
   if (cached) return cached;
   if (!serviceKey) return originalResponse(base, bucket, name);
 
-  const ffmpegModule = await import('ffmpeg-static');
-  const ffmpegPath = ffmpegModule.default;
-  if (!ffmpegPath) return originalResponse(base, bucket, name);
+  const command = ffmpegPath();
+  if (!command) return originalResponse(base, bucket, name);
 
   const original = await fetchObject(base, bucket, name, 'video/*,*/*');
   if (!original.ok) return new Response('upstream ' + original.status, { status: 502 });
@@ -177,7 +187,7 @@ async function optimizedVideo(base: string, bucket: string, serviceKey: string |
     await mkdir(workDir, { recursive: true });
     await writeFile(inputPath, Buffer.from(await original.arrayBuffer()));
     await runFfmpeg(
-      ffmpegPath,
+      command,
       [
         '-y',
         '-i',
@@ -202,7 +212,11 @@ async function optimizedVideo(base: string, bucket: string, serviceKey: string |
     const out = await readFile(outputPath);
     await uploadDerivative(base, bucket, serviceKey, path, out, 'video/mp4');
     return mediaResponse(out, 'video/mp4', RENDER_CACHE);
-  } catch {
+  } catch (e: any) {
+    console.warn('Album video optimization failed:', {
+      message: e?.message || String(e),
+      name,
+    });
     return originalResponse(base, bucket, name);
   } finally {
     await Promise.all([unlink(inputPath).catch(() => {}), unlink(outputPath).catch(() => {})]);
