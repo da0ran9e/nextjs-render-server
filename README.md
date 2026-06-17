@@ -6,6 +6,20 @@ This is a Next.js template which can be deployed to [Render](https://render.com)
 
 This template can be used to deploy your Next.js application as a Node.js server.
 
+## Album render quality
+
+The album keeps original uploads in Supabase. Browser-facing `/media` responses are generated on demand, cached back into the same bucket under `_render/`, and can be tuned with these Render environment variables:
+
+- `ALBUM_RENDER_IMAGE_MAX_EDGE` default `1600`
+- `ALBUM_RENDER_IMAGE_QUALITY` default `72`
+- `ALBUM_RENDER_VIDEO_MAX_WIDTH` default `960`
+- `ALBUM_RENDER_VIDEO_CRF` default `30`
+- `ALBUM_RENDER_VIDEO_PRESET` default `veryfast`
+- `ALBUM_RENDER_VIDEO_TIMEOUT_MS` default `120000`
+- `ALBUM_RENDER_CACHE_PREFIX` default `_render`
+
+Use `/media?name=<file>&raw=1` to fetch the original file for debugging.
+
 ### Deploy in one click
 
 1. Fork this repo.

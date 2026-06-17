@@ -1,3 +1,5 @@
+import { mediaKind, mediaSettings, mediaUrl } from '../media-settings';
+
 export const dynamic = 'force-dynamic';
 
 // Fallback khi chưa cấu hình Supabase
@@ -6,48 +8,54 @@ const FALLBACK = [
   { url: '/photo?id=1wYj-b5adY_woFDeDqwGdPBJDAT6hdVNV', title: 'IMG_2465', type: 'image' },
 ];
 
-const IMG_RE = /\.(jpe?g|png|webp|gif|avif|bmp)$/i;
-const VID_RE = /\.(mp4|webm|m4v|ogv)$/i;
-
 export async function GET() {
   const base = process.env.SUPABASE_URL;
   const key = process.env.SUPABASE_ANON_KEY;
   const bucket = process.env.SUPABASE_BUCKET || 'album';
+  const settings = mediaSettings();
 
   if (base && key) {
     try {
-      const r = await fetch(`${base}/storage/v1/object/list/${bucket}`, {
-        method: 'POST',
-        headers: {
-          apikey: key,
-          Authorization: `Bearer ${key}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          prefix: '',
-          limit: 300,
-          offset: 0,
-          sortBy: { column: 'created_at', order: 'desc' },
-        }),
-      });
-      if (r.ok) {
-        const items = await r.json();
-        const out = (Array.isArray(items) ? items : [])
-          .filter(
-            (it: any) =>
-              it &&
-              it.name &&
-              (IMG_RE.test(it.name) || VID_RE.test(it.name)) &&
-              (!it.metadata || it.metadata.size == null || it.metadata.size > 0)
-          )
-          .map((it: any) => ({
-            url: `/media?name=${encodeURIComponent(it.name)}`,
-            title: it.name,
-            type: VID_RE.test(it.name) ? 'video' : 'image',
-          }));
-        if (out.length) {
-          return Response.json(out, { headers: { 'Cache-Control': 'public, max-age=60' } });
-        }
+      const pageSize = 1000;
+      const items: any[] = [];
+      for (let offset = 0; ; offset += pageSize) {
+        const r = await fetch(`${base}/storage/v1/object/list/${bucket}`, {
+          method: 'POST',
+          headers: {
+            apikey: key,
+            Authorization: `Bearer ${key}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            prefix: '',
+            limit: pageSize,
+            offset,
+            sortBy: { column: 'created_at', order: 'desc' },
+          }),
+        });
+        if (!r.ok) break;
+        const batch = await r.json();
+        if (!Array.isArray(batch) || batch.length === 0) break;
+        items.push(...batch);
+        if (batch.length < pageSize) break;
+      }
+
+      const out = items
+        .filter(
+          (it: any) =>
+            it &&
+            it.name &&
+            !it.name.startsWith(`${settings.cachePrefix}/`) &&
+            mediaKind(it.name) &&
+            (!it.metadata || it.metadata.size == null || it.metadata.size > 0)
+        )
+        .map((it: any) => ({
+          url: mediaUrl(it.name),
+          title: it.name,
+          type: mediaKind(it.name),
+        }));
+      if (out.length) {
+        return Response.json(out, { headers: { 'Cache-Control': 'public, max-age=60' } });
       }
     } catch {
       // fallback
