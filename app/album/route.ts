@@ -33,7 +33,13 @@ export async function GET() {
       if (r.ok) {
         const items = await r.json();
         const out = (Array.isArray(items) ? items : [])
-          .filter((it: any) => it && it.name && (IMG_RE.test(it.name) || VID_RE.test(it.name)))
+          .filter(
+            (it: any) =>
+              it &&
+              it.name &&
+              (IMG_RE.test(it.name) || VID_RE.test(it.name)) &&
+              (!it.metadata || it.metadata.size == null || it.metadata.size > 0)
+          )
           .map((it: any) => ({
             url: `/media?name=${encodeURIComponent(it.name)}`,
             title: it.name,
