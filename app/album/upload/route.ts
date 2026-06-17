@@ -28,13 +28,15 @@ export async function POST(req: NextRequest) {
 
   const file = form.get('file');
   if (!(file instanceof File)) {
-    return Response.json({ error: 'Thiếu file ảnh.' }, { status: 400 });
+    return Response.json({ error: 'Thiếu file.' }, { status: 400 });
   }
-  if (!file.type.startsWith('image/')) {
-    return Response.json({ error: 'Chỉ chấp nhận ảnh.' }, { status: 400 });
+  const isImage = file.type.startsWith('image/');
+  const isVideo = file.type.startsWith('video/');
+  if (!isImage && !isVideo) {
+    return Response.json({ error: 'Chỉ chấp nhận ảnh hoặc video.' }, { status: 400 });
   }
-  if (file.size > 15 * 1024 * 1024) {
-    return Response.json({ error: 'Ảnh quá lớn (tối đa 15MB).' }, { status: 400 });
+  if (file.size > 50 * 1024 * 1024) {
+    return Response.json({ error: 'Tệp quá lớn (tối đa 50MB).' }, { status: 400 });
   }
 
   const ext = (file.name.split('.').pop() || 'jpg').toLowerCase().replace(/[^a-z0-9]/g, '');
