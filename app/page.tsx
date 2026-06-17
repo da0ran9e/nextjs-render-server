@@ -184,7 +184,7 @@ export default function Home() {
       scene.add(group);
 
       const nImg = Math.max(images.length, 1);
-      const r1 = Math.max(3.4, nImg * 0.62);
+      const r1 = Math.max(3.0, nImg * 0.5);
       camera.position.set(0, 0, r1 + 3.4);
       camera.lookAt(0, 0, 0);
 
@@ -193,8 +193,12 @@ export default function Home() {
 
       // Vòng ngoài: video — bán kính lớn hơn, ở phía sau, to hơn một chút
       if (videos.length) {
+        const videoGroup = new THREE.Group();
+        videoGroup.rotation.x = 0.18;
+        videoGroup.rotation.z = -0.06;
+        group.add(videoGroup);
         const r2 = Math.max(r1 + 6, videos.length * 0.85, r1 * 1.8);
-        addRing(THREE, group, videos, r2, 2.8, true);
+        addRing(THREE, videoGroup, videos, r2, 5.6, true);
       }
 
       let targetRot = 0;
