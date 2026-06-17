@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 
 type Item = { url: string; title?: string; type?: 'image' | 'video' };
+type Music = { embedUrl: string; updatedAt?: string | null; youtubeId: string; youtubeUrl: string };
 
 function isHeic(f: File) {
   const n = f.name.toLowerCase();
@@ -44,10 +45,16 @@ export default function Home() {
   const mountRef = useRef<HTMLDivElement>(null);
 
   const [panelOpen, setPanelOpen] = useState(false);
+  const [musicPanelOpen, setMusicPanelOpen] = useState(false);
   const [passcode, setPasscode] = useState('');
   const [files, setFiles] = useState<File[]>([]);
   const [status, setStatus] = useState('');
   const [busy, setBusy] = useState(false);
+  const [music, setMusic] = useState<Music | null>(null);
+  const [musicBusy, setMusicBusy] = useState(false);
+  const [musicPlaying, setMusicPlaying] = useState(false);
+  const [musicStatus, setMusicStatus] = useState('');
+  const [musicUrl, setMusicUrl] = useState('');
 
   async function doUpload() {
     if (!files.length) { setStatus('Hãy chọn ảnh/video.'); return; }
@@ -84,6 +91,47 @@ export default function Home() {
       setTimeout(() => window.location.reload(), 900);
     }
   }
+
+  async function doSaveMusic() {
+    if (!passcode) { setMusicStatus('Nhập mật khẩu.'); return; }
+    if (!musicUrl.trim()) { setMusicStatus('Dán link YouTube.'); return; }
+
+    setMusicBusy(true);
+    setMusicStatus('Đang lưu nhạc...');
+    try {
+      const r = await fetch('/music', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ passcode, youtubeUrl: musicUrl }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        setMusicStatus(j.error || `Lỗi ${r.status}`);
+      } else {
+        setMusic(j.music || null);
+        setMusicPlaying(false);
+        setMusicStatus('Đã lưu nhạc nền.');
+      }
+    } catch (e: any) {
+      setMusicStatus(e?.message || 'Lưu nhạc thất bại.');
+    } finally {
+      setMusicBusy(false);
+    }
+  }
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/music')
+      .then((r) => r.json())
+      .then((j) => {
+        if (cancelled) return;
+        const nextMusic = j?.music || null;
+        setMusic(nextMusic);
+        if (nextMusic?.youtubeUrl) setMusicUrl(nextMusic.youtubeUrl);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => {
     const SRC = 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js';
@@ -301,6 +349,34 @@ export default function Home() {
     marginTop: 8,
     boxSizing: 'border-box',
   };
+  const controlButtonStyle: React.CSSProperties = {
+    padding: '10px 16px',
+    borderRadius: 999,
+    border: '1px solid rgba(255,255,255,0.15)',
+    background: 'rgba(255,255,255,0.08)',
+    color: '#e8edf5',
+    fontSize: 14,
+    fontWeight: 600,
+    cursor: 'pointer',
+    backdropFilter: 'blur(8px)',
+    width: '100%',
+  };
+  const panelStyle: React.CSSProperties = {
+    position: 'absolute',
+    top: music ? 158 : 110,
+    right: 18,
+    width: 300,
+    padding: 16,
+    borderRadius: 14,
+    border: '1px solid rgba(255,255,255,0.12)',
+    background: 'rgba(17,23,38,0.96)',
+    boxShadow: '0 12px 40px rgba(0,0,0,0.5)',
+    textAlign: 'left',
+    zIndex: 10,
+  };
+  const musicSrc = music
+    ? `${music.embedUrl}?autoplay=1&loop=1&playlist=${encodeURIComponent(music.youtubeId)}&controls=0&modestbranding=1&rel=0&playsinline=1`
+    : '';
 
   return (
     <main
@@ -318,42 +394,68 @@ export default function Home() {
         textAlign: 'center',
       }}
     >
-      <button
-        onClick={() => { setPanelOpen((v) => !v); setStatus(''); }}
+      {musicPlaying && musicSrc && (
+        <iframe
+          allow="autoplay; encrypted-media"
+          src={musicSrc}
+          style={{
+            border: 0,
+            height: 1,
+            opacity: 0.01,
+            pointerEvents: 'none',
+            position: 'absolute',
+            width: 1,
+          }}
+          title="Nhạc nền"
+        />
+      )}
+
+      <div
         style={{
           position: 'absolute',
           top: 18,
           right: 18,
-          padding: '10px 16px',
-          borderRadius: 999,
-          border: '1px solid rgba(255,255,255,0.15)',
-          background: 'rgba(255,255,255,0.08)',
-          color: '#e8edf5',
-          fontSize: 14,
-          fontWeight: 600,
-          cursor: 'pointer',
-          backdropFilter: 'blur(8px)',
+          display: 'grid',
+          gap: 8,
+          width: 164,
+          zIndex: 11,
         }}
       >
-        ＋ Tải ảnh / video
-      </button>
+        <button
+          onClick={() => {
+            setPanelOpen((v) => !v);
+            setMusicPanelOpen(false);
+            setStatus('');
+          }}
+          style={controlButtonStyle}
+        >
+          ＋ Tải ảnh / video
+        </button>
+        <button
+          onClick={() => {
+            setMusicPanelOpen((v) => !v);
+            setPanelOpen(false);
+            setMusicStatus('');
+          }}
+          style={controlButtonStyle}
+        >
+          ♪ Thêm nhạc
+        </button>
+        {music && (
+          <button
+            onClick={() => setMusicPlaying((v) => !v)}
+            style={{
+              ...controlButtonStyle,
+              background: musicPlaying ? 'rgba(34,211,238,0.18)' : 'rgba(255,255,255,0.08)',
+            }}
+          >
+            {musicPlaying ? 'Tắt nhạc' : 'Bật nhạc'}
+          </button>
+        )}
+      </div>
 
       {panelOpen && (
-        <div
-          style={{
-            position: 'absolute',
-            top: 64,
-            right: 18,
-            width: 300,
-            padding: 16,
-            borderRadius: 14,
-            border: '1px solid rgba(255,255,255,0.12)',
-            background: 'rgba(17,23,38,0.96)',
-            boxShadow: '0 12px 40px rgba(0,0,0,0.5)',
-            textAlign: 'left',
-            zIndex: 10,
-          }}
-        >
+        <div style={panelStyle}>
           <div style={{ fontWeight: 700, fontSize: 15 }}>Tải lên album</div>
           <div style={{ fontSize: 12, color: '#9aa6b8', marginTop: 4 }}>
             Chọn nhiều tệp được. Ảnh iPhone (HEIC) sẽ tự đổi sang JPG. Video (.mp4/.mov) vào vòng ngoài.
@@ -397,6 +499,66 @@ export default function Home() {
           </button>
           {status && (
             <div style={{ marginTop: 10, fontSize: 12, color: '#9aa6b8', wordBreak: 'break-word' }}>{status}</div>
+          )}
+        </div>
+      )}
+
+      {musicPanelOpen && (
+        <div style={panelStyle}>
+          <div style={{ fontWeight: 700, fontSize: 15 }}>Nhạc nền</div>
+          <div style={{ fontSize: 12, color: '#9aa6b8', marginTop: 4 }}>
+            Dán link YouTube để dùng làm nhạc nền cho album.
+          </div>
+          <input
+            type="password"
+            placeholder="Mật khẩu"
+            value={passcode}
+            onChange={(e) => setPasscode(e.target.value)}
+            style={inputStyle}
+          />
+          <input
+            type="url"
+            placeholder="https://youtu.be/..."
+            value={musicUrl}
+            onChange={(e) => setMusicUrl(e.target.value)}
+            style={inputStyle}
+          />
+          <button
+            onClick={doSaveMusic}
+            disabled={musicBusy}
+            style={{
+              width: '100%',
+              marginTop: 12,
+              padding: '10px 12px',
+              borderRadius: 8,
+              border: 'none',
+              background: musicBusy ? '#3730a3' : 'linear-gradient(90deg,#22d3ee,#a78bfa)',
+              color: '#06121a',
+              fontWeight: 700,
+              fontSize: 14,
+              cursor: musicBusy ? 'default' : 'pointer',
+            }}
+          >
+            {musicBusy ? 'Đang lưu...' : 'Lưu nhạc'}
+          </button>
+          {music && (
+            <button
+              onClick={() => setMusicPlaying((v) => !v)}
+              style={{
+                ...inputStyle,
+                border: '1px solid rgba(34,211,238,0.35)',
+                color: '#e8edf5',
+                cursor: 'pointer',
+                fontWeight: 700,
+              }}
+            >
+              {musicPlaying ? 'Tắt nhạc' : 'Bật nhạc'}
+            </button>
+          )}
+          {musicStatus && (
+            <div style={{ marginTop: 10, fontSize: 12, color: '#9aa6b8', wordBreak: 'break-word' }}>
+              {musicStatus}
+            </div>
           )}
         </div>
       )}

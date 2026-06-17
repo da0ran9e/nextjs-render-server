@@ -20,6 +20,10 @@ The album keeps original uploads in Supabase. Browser-facing `/media` responses 
 
 Use `/media?name=<file>&raw=1` to fetch the original file for debugging.
 
+## Album background music
+
+The portfolio can store one YouTube background track. The `/music` route reads and writes a small JSON settings file in Supabase Storage at `_settings/music.json` inside the album bucket. Saving a new track uses the same `UPLOAD_PASSCODE` as media uploads.
+
 ### Deploy in one click
 
 1. Fork this repo.
