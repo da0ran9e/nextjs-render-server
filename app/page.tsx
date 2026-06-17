@@ -53,6 +53,7 @@ export default function Home() {
   const [music, setMusic] = useState<Music | null>(null);
   const [musicBusy, setMusicBusy] = useState(false);
   const [musicPlaying, setMusicPlaying] = useState(false);
+  const [musicAttemptKey, setMusicAttemptKey] = useState(0);
   const [musicStatus, setMusicStatus] = useState('');
   const [musicUrl, setMusicUrl] = useState('');
 
@@ -108,8 +109,10 @@ export default function Home() {
       if (!r.ok) {
         setMusicStatus(j.error || `Lỗi ${r.status}`);
       } else {
-        setMusic(j.music || null);
-        setMusicPlaying(false);
+        const nextMusic = j.music || null;
+        setMusic(nextMusic);
+        setMusicPlaying(Boolean(nextMusic));
+        setMusicAttemptKey((v) => v + 1);
         setMusicStatus('Đã lưu nhạc nền.');
       }
     } catch (e: any) {
@@ -127,11 +130,37 @@ export default function Home() {
         if (cancelled) return;
         const nextMusic = j?.music || null;
         setMusic(nextMusic);
-        if (nextMusic?.youtubeUrl) setMusicUrl(nextMusic.youtubeUrl);
+        if (nextMusic?.youtubeUrl) {
+          setMusicUrl(nextMusic.youtubeUrl);
+          setMusicPlaying(true);
+          setMusicAttemptKey((v) => v + 1);
+        } else {
+          setMusicPlaying(false);
+        }
       })
       .catch(() => {});
     return () => { cancelled = true; };
   }, []);
+
+  useEffect(() => {
+    if (!music || !musicPlaying) return;
+
+    let retried = false;
+    const retryAutoplay = () => {
+      if (retried) return;
+      retried = true;
+      setMusicAttemptKey((v) => v + 1);
+    };
+
+    window.addEventListener('pointerdown', retryAutoplay, { capture: true, once: true });
+    window.addEventListener('keydown', retryAutoplay, { capture: true, once: true });
+    window.addEventListener('touchstart', retryAutoplay, { capture: true, once: true });
+    return () => {
+      window.removeEventListener('pointerdown', retryAutoplay, true);
+      window.removeEventListener('keydown', retryAutoplay, true);
+      window.removeEventListener('touchstart', retryAutoplay, true);
+    };
+  }, [music, musicPlaying]);
 
   useEffect(() => {
     const SRC = 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js';
@@ -397,6 +426,7 @@ export default function Home() {
       {musicPlaying && musicSrc && (
         <iframe
           allow="autoplay; encrypted-media"
+          key={musicAttemptKey}
           src={musicSrc}
           style={{
             border: 0,
