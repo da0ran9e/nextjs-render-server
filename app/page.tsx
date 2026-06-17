@@ -2,39 +2,77 @@
 
 import { useEffect, useRef, useState } from 'react';
 
-type Photo = { url: string; title?: string };
+type Item = { url: string; title?: string; type?: 'image' | 'video' };
+
+function isHeic(f: File) {
+  const n = f.name.toLowerCase();
+  return (
+    f.type === 'image/heic' ||
+    f.type === 'image/heif' ||
+    n.endsWith('.heic') ||
+    n.endsWith('.heif') ||
+    n.endsWith('.pvt')
+  );
+}
+
+function ensureHeicLib(): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if ((window as any).heic2any) return resolve();
+    const s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js';
+    s.onload = () => resolve();
+    s.onerror = () => reject(new Error('load heic2any failed'));
+    document.body.appendChild(s);
+  });
+}
+
+async function convertIfNeeded(f: File): Promise<File> {
+  if (!isHeic(f)) return f;
+  await ensureHeicLib();
+  const out = await (window as any).heic2any({ blob: f, toType: 'image/jpeg', quality: 0.85 });
+  const blob = Array.isArray(out) ? out[0] : out;
+  const base = f.name.replace(/\.[^.]+$/, '') || 'photo';
+  return new File([blob], base + '.jpg', { type: 'image/jpeg' });
+}
 
 export default function Home() {
   const mountRef = useRef<HTMLDivElement>(null);
 
-  // Upload UI state
   const [panelOpen, setPanelOpen] = useState(false);
   const [passcode, setPasscode] = useState('');
-  const [file, setFile] = useState<File | null>(null);
+  const [files, setFiles] = useState<File[]>([]);
   const [status, setStatus] = useState('');
   const [busy, setBusy] = useState(false);
 
   async function doUpload() {
-    if (!file) { setStatus('Hãy chọn một ảnh.'); return; }
+    if (!files.length) { setStatus('Hãy chọn ảnh/video.'); return; }
     if (!passcode) { setStatus('Nhập mật khẩu.'); return; }
     setBusy(true);
-    setStatus('Đang tải lên...');
-    try {
-      const fd = new FormData();
-      fd.append('file', file);
-      fd.append('passcode', passcode);
-      const r = await fetch('/album/upload', { method: 'POST', body: fd });
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok) {
-        setStatus(j.error || 'Tải lên thất bại.');
-        setBusy(false);
-        return;
+    let ok = 0;
+    const errs: string[] = [];
+    for (let i = 0; i < files.length; i++) {
+      const f = files[i];
+      setStatus(`Đang xử lý ${i + 1}/${files.length}: ${f.name}...`);
+      try {
+        const prepared = await convertIfNeeded(f);
+        const fd = new FormData();
+        fd.append('file', prepared);
+        fd.append('passcode', passcode);
+        const r = await fetch('/album/upload', { method: 'POST', body: fd });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) { errs.push(`${f.name}: ${j.error || r.status}`); }
+        else ok++;
+      } catch (e: any) {
+        errs.push(`${f.name}: ${e?.message || 'lỗi chuyển đổi'}`);
       }
-      setStatus('Thành công! Đang làm mới...');
-      setTimeout(() => window.location.reload(), 900);
-    } catch {
-      setStatus('Lỗi mạng.');
+    }
+    if (errs.length) {
+      setStatus(`Xong ${ok}/${files.length}. Lỗi: ${errs.slice(0, 3).join(' | ')}`);
       setBusy(false);
+      if (ok > 0) setTimeout(() => window.location.reload(), 2500);
+    } else {
+      setStatus(`Tải lên ${ok} tệp thành công! Đang làm mới...`);
+      setTimeout(() => window.location.reload(), 900);
     }
   }
 
@@ -45,38 +83,13 @@ export default function Home() {
     let renderer: any = null;
     let onResize: (() => void) | null = null;
     let cleanupPointer: (() => void) | null = null;
+    const videoEls: HTMLVideoElement[] = [];
     let cancelled = false;
 
-    function startWithAlbum(album: Photo[]) {
-      const THREE = (window as any).THREE;
-      if (!THREE || !mount || cancelled) return;
-      if (!album.length) return;
-
-      let width = mount.clientWidth || window.innerWidth;
-      let height = mount.clientHeight || 480;
-
-      const scene = new THREE.Scene();
-      const camera = new THREE.PerspectiveCamera(55, width / height, 0.1, 100);
-
-      renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-      renderer.setSize(width, height);
-      mount.appendChild(renderer.domElement);
-
-      const group = new THREE.Group();
-      scene.add(group);
-
-      const N = Math.max(album.length, 1);
-      const radius = Math.max(3.4, N * 0.62);
-      camera.position.set(0, 0, radius + 3.4);
-      camera.lookAt(0, 0, 0);
-
-      const loader = new THREE.TextureLoader();
-      loader.setCrossOrigin('anonymous');
-      const H = 1.9;
-
-      album.forEach((item, i) => {
-        const a = (i / N) * Math.PI * 2;
+    function addRing(THREE: any, parent: any, items: Item[], radius: number, H: number, faceInward: boolean) {
+      const N = Math.max(items.length, 1);
+      items.forEach((item, i) => {
+        const a = (i / N) * Math.PI * 2 + (faceInward ? Math.PI / N : 0);
         const frame = new THREE.Mesh(
           new THREE.PlaneGeometry(H * 0.78 + 0.12, H + 0.12),
           new THREE.MeshBasicMaterial({ color: 0x1b2333, side: THREE.DoubleSide })
@@ -88,30 +101,92 @@ export default function Home() {
         mesh.position.z = 0.01;
         frame.add(mesh);
         frame.position.set(radius * Math.sin(a), 0, radius * Math.cos(a));
-        frame.rotation.y = a;
-        group.add(frame);
+        frame.rotation.y = faceInward ? a + Math.PI : a;
+        parent.add(frame);
 
-        loader.load(
-          item.url,
-          (tex: any) => {
-            tex.anisotropy = renderer.capabilities.getMaxAnisotropy
-              ? renderer.capabilities.getMaxAnisotropy()
-              : 1;
-            const img = tex.image;
-            const aspect = img && img.width && img.height ? img.width / img.height : 0.78;
-            const w = H * aspect;
-            mesh.geometry.dispose();
-            mesh.geometry = new THREE.PlaneGeometry(w, H);
-            (frame.geometry as any).dispose();
-            frame.geometry = new THREE.PlaneGeometry(w + 0.12, H + 0.12);
-            (mesh.material as any).color.set(0xffffff);
-            (mesh.material as any).map = tex;
-            (mesh.material as any).needsUpdate = true;
-          },
-          undefined,
-          () => {}
-        );
+        const setAspect = (aspect: number) => {
+          const w = H * (aspect || 0.78);
+          mesh.geometry.dispose();
+          mesh.geometry = new THREE.PlaneGeometry(w, H);
+          (frame.geometry as any).dispose();
+          frame.geometry = new THREE.PlaneGeometry(w + 0.12, H + 0.12);
+        };
+
+        if (item.type === 'video') {
+          const v = document.createElement('video');
+          v.src = item.url;
+          v.crossOrigin = 'anonymous';
+          v.loop = true;
+          v.muted = true;
+          (v as any).playsInline = true;
+          v.setAttribute('playsinline', 'true');
+          v.autoplay = true;
+          v.play().catch(() => {});
+          videoEls.push(v);
+          const tex = new THREE.VideoTexture(v);
+          tex.minFilter = THREE.LinearFilter;
+          tex.magFilter = THREE.LinearFilter;
+          (mesh.material as any).color.set(0xffffff);
+          (mesh.material as any).map = tex;
+          (mesh.material as any).needsUpdate = true;
+          v.addEventListener('loadedmetadata', () => {
+            if (v.videoWidth > 0) setAspect(v.videoWidth / v.videoHeight);
+          });
+        } else {
+          const loader = new THREE.TextureLoader();
+          loader.setCrossOrigin('anonymous');
+          loader.load(
+            item.url,
+            (tex: any) => {
+              const img = tex.image;
+              const aspect = img && img.width && img.height ? img.width / img.height : 0.78;
+              setAspect(aspect);
+              (mesh.material as any).color.set(0xffffff);
+              (mesh.material as any).map = tex;
+              (mesh.material as any).needsUpdate = true;
+            },
+            undefined,
+            () => {}
+          );
+        }
       });
+    }
+
+    function startWithAlbum(all: Item[]) {
+      const THREE = (window as any).THREE;
+      if (!THREE || !mount || cancelled) return;
+
+      const images = all.filter((x) => x.type !== 'video');
+      const videos = all.filter((x) => x.type === 'video');
+      if (!images.length && !videos.length) return;
+
+      let width = mount.clientWidth || window.innerWidth;
+      let height = mount.clientHeight || 480;
+
+      const scene = new THREE.Scene();
+      const camera = new THREE.PerspectiveCamera(55, width / height, 0.1, 200);
+
+      renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      renderer.setSize(width, height);
+      mount.appendChild(renderer.domElement);
+
+      const group = new THREE.Group();
+      scene.add(group);
+
+      const nImg = Math.max(images.length, 1);
+      const r1 = Math.max(3.4, nImg * 0.62);
+      camera.position.set(0, 0, r1 + 3.4);
+      camera.lookAt(0, 0, 0);
+
+      // Vòng trong: ảnh (view chính, hướng ra ngoài như hiện tại)
+      if (images.length) addRing(THREE, group, images, r1, 1.9, false);
+
+      // Vòng ngoài: video — bán kính lớn hơn, ở phía sau, to hơn một chút
+      if (videos.length) {
+        const r2 = Math.max(r1 + 6, videos.length * 0.85, r1 * 1.8);
+        addRing(THREE, group, videos, r2, 2.8, true);
+      }
 
       let targetRot = 0;
       let curRot = 0;
@@ -183,9 +258,7 @@ export default function Home() {
 
     fetch('/album')
       .then((r) => r.json())
-      .then((album: Photo[]) => {
-        ensureThree(() => startWithAlbum(Array.isArray(album) ? album : []));
-      })
+      .then((all: Item[]) => ensureThree(() => startWithAlbum(Array.isArray(all) ? all : [])))
       .catch(() => ensureThree(() => startWithAlbum([])));
 
     return () => {
@@ -193,6 +266,7 @@ export default function Home() {
       if (frameId) cancelAnimationFrame(frameId);
       if (onResize) window.removeEventListener('resize', onResize);
       if (cleanupPointer) cleanupPointer();
+      videoEls.forEach((v) => { try { v.pause(); v.src = ''; } catch {} });
       if (renderer && mount && renderer.domElement.parentNode === mount) {
         mount.removeChild(renderer.domElement);
         renderer.dispose();
@@ -228,7 +302,6 @@ export default function Home() {
         textAlign: 'center',
       }}
     >
-      {/* Upload button */}
       <button
         onClick={() => { setPanelOpen((v) => !v); setStatus(''); }}
         style={{
@@ -246,7 +319,7 @@ export default function Home() {
           backdropFilter: 'blur(8px)',
         }}
       >
-        ＋ Tải ảnh
+        ＋ Tải ảnh / video
       </button>
 
       {panelOpen && (
@@ -255,17 +328,20 @@ export default function Home() {
             position: 'absolute',
             top: 64,
             right: 18,
-            width: 280,
+            width: 300,
             padding: 16,
             borderRadius: 14,
             border: '1px solid rgba(255,255,255,0.12)',
-            background: 'rgba(17,23,38,0.95)',
+            background: 'rgba(17,23,38,0.96)',
             boxShadow: '0 12px 40px rgba(0,0,0,0.5)',
             textAlign: 'left',
             zIndex: 10,
           }}
         >
-          <div style={{ fontWeight: 700, fontSize: 15 }}>Tải ảnh lên album</div>
+          <div style={{ fontWeight: 700, fontSize: 15 }}>Tải lên album</div>
+          <div style={{ fontSize: 12, color: '#9aa6b8', marginTop: 4 }}>
+            Chọn nhiều tệp được. Ảnh iPhone (HEIC) sẽ tự đổi sang JPG. Video (.mp4) vào vòng ngoài.
+          </div>
           <input
             type="password"
             placeholder="Mật khẩu"
@@ -275,10 +351,16 @@ export default function Home() {
           />
           <input
             type="file"
-            accept="image/*"
-            onChange={(e) => setFile(e.target.files && e.target.files[0] ? e.target.files[0] : null)}
+            accept="image/*,video/*,.heic,.heif,.pvt"
+            multiple
+            onChange={(e) => setFiles(e.target.files ? Array.from(e.target.files) : [])}
             style={{ ...inputStyle, padding: '8px' }}
           />
+          {files.length > 0 && (
+            <div style={{ fontSize: 12, color: '#9aa6b8', marginTop: 6 }}>
+              Đã chọn {files.length} tệp
+            </div>
+          )}
           <button
             onClick={doUpload}
             disabled={busy}
@@ -298,7 +380,7 @@ export default function Home() {
             {busy ? 'Đang tải...' : 'Tải lên'}
           </button>
           {status && (
-            <div style={{ marginTop: 10, fontSize: 13, color: '#9aa6b8' }}>{status}</div>
+            <div style={{ marginTop: 10, fontSize: 12, color: '#9aa6b8', wordBreak: 'break-word' }}>{status}</div>
           )}
         </div>
       )}
@@ -316,18 +398,18 @@ export default function Home() {
           marginBottom: 14,
         }}
       >
-        Album 3D • Next.js server • Supabase
+        Album 3D • ảnh (vòng trong) + video (vòng ngoài)
       </div>
       <h1 style={{ fontSize: 'clamp(28px, 5vw, 44px)', fontWeight: 800, margin: '0 0 6px' }}>
         Album ảnh của tôi
       </h1>
-      <p style={{ color: '#9aa6b8', maxWidth: 560, margin: '0 0 8px' }}>
-        Kéo chuột (hoặc vuốt) để xoay vòng ảnh. Bấm “Tải ảnh” để thêm ảnh mới.
+      <p style={{ color: '#9aa6b8', maxWidth: 580, margin: '0 0 8px' }}>
+        Kéo để xoay. Ảnh ở vòng trong, video chạy ở vòng ngoài phía sau.
       </p>
 
       <div
         ref={mountRef}
-        style={{ width: 'min(960px, 96vw)', height: '70vh', minHeight: 420, cursor: 'grab' }}
+        style={{ width: 'min(1040px, 98vw)', height: '74vh', minHeight: 440, cursor: 'grab' }}
       />
     </main>
   );
