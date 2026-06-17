@@ -7,7 +7,7 @@ const FALLBACK = [
 ];
 
 const IMG_RE = /\.(jpe?g|png|webp|gif|avif|bmp)$/i;
-const VID_RE = /\.(mp4|webm|mov|m4v|ogv)$/i;
+const VID_RE = /\.(mp4|webm|m4v|ogv)$/i;
 
 export async function GET() {
   const base = process.env.SUPABASE_URL;

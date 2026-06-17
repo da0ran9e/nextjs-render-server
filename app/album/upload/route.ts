@@ -35,11 +35,17 @@ export async function POST(req: NextRequest) {
   if (!isImage && !isVideo) {
     return Response.json({ error: 'Chỉ chấp nhận ảnh hoặc video.' }, { status: 400 });
   }
+  if (file.size === 0) {
+    return Response.json({ error: 'File rỗng, hãy chọn lại tệp khác.' }, { status: 400 });
+  }
   if (file.size > 50 * 1024 * 1024) {
     return Response.json({ error: 'Tệp quá lớn (tối đa 50MB).' }, { status: 400 });
   }
 
   const ext = (file.name.split('.').pop() || 'jpg').toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (isVideo && !['mp4', 'webm', 'm4v', 'ogv'].includes(ext)) {
+    return Response.json({ error: 'Video nên là MP4/WebM/M4V để chạy ổn trên trình duyệt.' }, { status: 400 });
+  }
   const safeName = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext || 'jpg'}`;
   const buf = await file.arrayBuffer();
 

@@ -15,6 +15,11 @@ function isHeic(f: File) {
   );
 }
 
+function isBrowserVideo(f: File) {
+  const n = f.name.toLowerCase();
+  return n.endsWith('.mp4') || n.endsWith('.webm') || n.endsWith('.m4v') || n.endsWith('.ogv');
+}
+
 function ensureHeicLib(): Promise<void> {
   return new Promise((resolve, reject) => {
     if ((window as any).heic2any) return resolve();
@@ -55,6 +60,10 @@ export default function Home() {
       setStatus(`Đang xử lý ${i + 1}/${files.length}: ${f.name}...`);
       try {
         const prepared = await convertIfNeeded(f);
+        if (prepared.type.startsWith('video/') && !isBrowserVideo(prepared)) {
+          errs.push(`${f.name}: video nên đổi sang MP4/WebM để chạy ổn trên trình duyệt`);
+          continue;
+        }
         const fd = new FormData();
         fd.append('file', prepared);
         fd.append('passcode', passcode);
@@ -351,7 +360,7 @@ export default function Home() {
           />
           <input
             type="file"
-            accept="image/*,video/*,.heic,.heif,.pvt"
+            accept="image/*,video/mp4,video/webm,.mp4,.webm,.m4v,.ogv,.heic,.heif,.pvt"
             multiple
             onChange={(e) => setFiles(e.target.files ? Array.from(e.target.files) : [])}
             style={{ ...inputStyle, padding: '8px' }}
