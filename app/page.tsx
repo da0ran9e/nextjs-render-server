@@ -1,624 +1,185 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 
-type Item = { url: string; title?: string; type?: 'image' | 'video' };
-type Music = { embedUrl: string; updatedAt?: string | null; youtubeId: string; youtubeUrl: string };
+// Trang upload gọn nhẹ: nhập mật khẩu, chọn ảnh/video, đẩy lên Supabase bucket.
+// Tự đổi HEIC/HEIF (ảnh iPhone) -> JPEG ngay trong trình duyệt trước khi gửi.
+// Gửi tới route /album/upload (server dùng service key, chạy kể cả khi bucket private).
 
-function isHeic(f: File) {
-  const n = f.name.toLowerCase();
-  return (
-    f.type === 'image/heic' ||
-    f.type === 'image/heif' ||
-    n.endsWith('.heic') ||
-    n.endsWith('.heif') ||
-    n.endsWith('.pvt')
-  );
-}
+type Row = { name: string; status: 'pending' | 'ok' | 'error'; msg?: string };
 
-function isBrowserVideo(f: File) {
-  const n = f.name.toLowerCase();
-  return n.endsWith('.mp4') || n.endsWith('.webm') || n.endsWith('.mov') || n.endsWith('.m4v') || n.endsWith('.ogv');
-}
-
-function ensureHeicLib(): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if ((window as any).heic2any) return resolve();
-    const s = document.createElement('script');
-    s.src = 'https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js';
-    s.onload = () => resolve();
-    s.onerror = () => reject(new Error('load heic2any failed'));
-    document.body.appendChild(s);
-  });
-}
-
-async function convertIfNeeded(f: File): Promise<File> {
-  if (!isHeic(f)) return f;
-  await ensureHeicLib();
-  const out = await (window as any).heic2any({ blob: f, toType: 'image/jpeg', quality: 0.85 });
-  const blob = Array.isArray(out) ? out[0] : out;
-  const base = f.name.replace(/\.[^.]+$/, '') || 'photo';
+async function toUploadable(file: File): Promise<File> {
+  const isHeic =
+    /heic|heif/i.test(file.type) || /\.(heic|heif)$/i.test(file.name);
+  if (!isHeic) return file;
+  // nạp heic2any từ CDN chỉ khi cần
+  const w = window as any;
+  if (!w.heic2any) {
+    await new Promise<void>((res, rej) => {
+      const s = document.createElement('script');
+      s.src = 'https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js';
+      s.onload = () => res();
+      s.onerror = () => rej(new Error('Không nạp được bộ chuyển HEIC'));
+      document.body.appendChild(s);
+    });
+  }
+  const blob: Blob = await w.heic2any({ blob: file, toType: 'image/jpeg', quality: 0.9 });
+  const base = file.name.replace(/\.(heic|heif)$/i, '');
   return new File([blob], base + '.jpg', { type: 'image/jpeg' });
 }
 
 export default function Home() {
-  const mountRef = useRef<HTMLDivElement>(null);
-
-  const [panelOpen, setPanelOpen] = useState(false);
-  const [musicPanelOpen, setMusicPanelOpen] = useState(false);
   const [passcode, setPasscode] = useState('');
-  const [files, setFiles] = useState<File[]>([]);
-  const [status, setStatus] = useState('');
+  const [rows, setRows] = useState<Row[]>([]);
   const [busy, setBusy] = useState(false);
-  const [music, setMusic] = useState<Music | null>(null);
-  const [musicBusy, setMusicBusy] = useState(false);
-  const [musicPlaying, setMusicPlaying] = useState(false);
-  const [musicAttemptKey, setMusicAttemptKey] = useState(0);
-  const [musicStatus, setMusicStatus] = useState('');
-  const [musicUrl, setMusicUrl] = useState('');
+  const inputRef = useRef<HTMLInputElement>(null);
 
-  async function doUpload() {
-    if (!files.length) { setStatus('Hãy chọn ảnh/video.'); return; }
-    if (!passcode) { setStatus('Nhập mật khẩu.'); return; }
+  function setRow(name: string, patch: Partial<Row>) {
+    setRows((rs) => rs.map((r) => (r.name === name ? { ...r, ...patch } : r)));
+  }
+
+  async function handleFiles(files: FileList | null) {
+    if (!files || !files.length) return;
+    if (!passcode) {
+      alert('Nhập mật khẩu trước đã.');
+      return;
+    }
+    const list = Array.from(files);
+    setRows(list.map((f) => ({ name: f.name, status: 'pending' as const })));
     setBusy(true);
-    let ok = 0;
-    const errs: string[] = [];
-    for (let i = 0; i < files.length; i++) {
-      const f = files[i];
-      setStatus(`Đang xử lý ${i + 1}/${files.length}: ${f.name}...`);
+    for (const f of list) {
       try {
-        const prepared = await convertIfNeeded(f);
-        if (prepared.type.startsWith('video/') && !isBrowserVideo(prepared)) {
-          errs.push(`${f.name}: video nên là MP4/MOV/WebM để chạy ổn trên trình duyệt`);
-          continue;
-        }
-        const fd = new FormData();
-        fd.append('file', prepared);
-        fd.append('passcode', passcode);
-        const r = await fetch('/album/upload', { method: 'POST', body: fd });
+        const up = await toUploadable(f);
+        const form = new FormData();
+        form.append('passcode', passcode);
+        form.append('file', up);
+        const r = await fetch('/album/upload', { method: 'POST', body: form });
         const j = await r.json().catch(() => ({}));
-        if (!r.ok) { errs.push(`${f.name}: ${j.error || r.status}`); }
-        else ok++;
+        if (r.ok && j.ok) setRow(f.name, { status: 'ok', msg: j.name });
+        else setRow(f.name, { status: 'error', msg: j.error || ('Lỗi ' + r.status) });
       } catch (e: any) {
-        errs.push(`${f.name}: ${e?.message || 'lỗi chuyển đổi'}`);
+        setRow(f.name, { status: 'error', msg: e?.message || 'Lỗi' });
       }
     }
-    if (errs.length) {
-      setStatus(`Xong ${ok}/${files.length}. Lỗi: ${errs.slice(0, 3).join(' | ')}`);
-      setBusy(false);
-      if (ok > 0) setTimeout(() => window.location.reload(), 2500);
-    } else {
-      setStatus(`Tải lên ${ok} tệp thành công! Đang làm mới...`);
-      setTimeout(() => window.location.reload(), 900);
-    }
+    setBusy(false);
+    if (inputRef.current) inputRef.current.value = '';
   }
 
-  async function doSaveMusic() {
-    if (!passcode) { setMusicStatus('Nhập mật khẩu.'); return; }
-    if (!musicUrl.trim()) { setMusicStatus('Dán link YouTube.'); return; }
-
-    setMusicBusy(true);
-    setMusicStatus('Đang lưu nhạc...');
-    try {
-      const r = await fetch('/music', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ passcode, youtubeUrl: musicUrl }),
-      });
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok) {
-        setMusicStatus(j.error || `Lỗi ${r.status}`);
-      } else {
-        const nextMusic = j.music || null;
-        setMusic(nextMusic);
-        setMusicPlaying(Boolean(nextMusic));
-        setMusicAttemptKey((v) => v + 1);
-        setMusicStatus('Đã lưu nhạc nền.');
-      }
-    } catch (e: any) {
-      setMusicStatus(e?.message || 'Lưu nhạc thất bại.');
-    } finally {
-      setMusicBusy(false);
-    }
-  }
-
-  useEffect(() => {
-    let cancelled = false;
-    fetch('/music')
-      .then((r) => r.json())
-      .then((j) => {
-        if (cancelled) return;
-        const nextMusic = j?.music || null;
-        setMusic(nextMusic);
-        if (nextMusic?.youtubeUrl) {
-          setMusicUrl(nextMusic.youtubeUrl);
-          setMusicPlaying(true);
-          setMusicAttemptKey((v) => v + 1);
-        } else {
-          setMusicPlaying(false);
-        }
-      })
-      .catch(() => {});
-    return () => { cancelled = true; };
-  }, []);
-
-  useEffect(() => {
-    if (!music || !musicPlaying) return;
-
-    let retried = false;
-    const retryAutoplay = () => {
-      if (retried) return;
-      retried = true;
-      setMusicAttemptKey((v) => v + 1);
-    };
-
-    window.addEventListener('pointerdown', retryAutoplay, { capture: true, once: true });
-    window.addEventListener('keydown', retryAutoplay, { capture: true, once: true });
-    window.addEventListener('touchstart', retryAutoplay, { capture: true, once: true });
-    return () => {
-      window.removeEventListener('pointerdown', retryAutoplay, true);
-      window.removeEventListener('keydown', retryAutoplay, true);
-      window.removeEventListener('touchstart', retryAutoplay, true);
-    };
-  }, [music, musicPlaying]);
-
-  useEffect(() => {
-    const SRC = 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js';
-    const mount = mountRef.current;
-    let frameId = 0;
-    let renderer: any = null;
-    let onResize: (() => void) | null = null;
-    let cleanupPointer: (() => void) | null = null;
-    const videoEls: HTMLVideoElement[] = [];
-    let cancelled = false;
-
-    function addRing(THREE: any, parent: any, items: Item[], radius: number, H: number, faceInward: boolean) {
-      const N = Math.max(items.length, 1);
-      items.forEach((item, i) => {
-        const a = (i / N) * Math.PI * 2 + (faceInward ? Math.PI / N : 0);
-        const frame = new THREE.Mesh(
-          new THREE.PlaneGeometry(H * 0.78 + 0.12, H + 0.12),
-          new THREE.MeshBasicMaterial({ color: 0x1b2333, side: THREE.DoubleSide })
-        );
-        const mesh = new THREE.Mesh(
-          new THREE.PlaneGeometry(H * 0.78, H),
-          new THREE.MeshBasicMaterial({ color: 0x0b0f17, side: THREE.DoubleSide })
-        );
-        mesh.position.z = 0.01;
-        frame.add(mesh);
-        frame.position.set(radius * Math.sin(a), 0, radius * Math.cos(a));
-        frame.rotation.y = faceInward ? a + Math.PI : a;
-        parent.add(frame);
-
-        const setAspect = (aspect: number) => {
-          const w = H * (aspect || 0.78);
-          mesh.geometry.dispose();
-          mesh.geometry = new THREE.PlaneGeometry(w, H);
-          (frame.geometry as any).dispose();
-          frame.geometry = new THREE.PlaneGeometry(w + 0.12, H + 0.12);
-        };
-
-        if (item.type === 'video') {
-          const v = document.createElement('video');
-          v.src = item.url;
-          v.crossOrigin = 'anonymous';
-          v.loop = true;
-          v.muted = true;
-          (v as any).playsInline = true;
-          v.setAttribute('playsinline', 'true');
-          v.autoplay = true;
-          v.play().catch(() => {});
-          videoEls.push(v);
-          const tex = new THREE.VideoTexture(v);
-          tex.minFilter = THREE.LinearFilter;
-          tex.magFilter = THREE.LinearFilter;
-          (mesh.material as any).color.set(0xffffff);
-          (mesh.material as any).map = tex;
-          (mesh.material as any).needsUpdate = true;
-          v.addEventListener('loadedmetadata', () => {
-            if (v.videoWidth > 0) setAspect(v.videoWidth / v.videoHeight);
-          });
-        } else {
-          const loader = new THREE.TextureLoader();
-          loader.setCrossOrigin('anonymous');
-          loader.load(
-            item.url,
-            (tex: any) => {
-              const img = tex.image;
-              const aspect = img && img.width && img.height ? img.width / img.height : 0.78;
-              setAspect(aspect);
-              (mesh.material as any).color.set(0xffffff);
-              (mesh.material as any).map = tex;
-              (mesh.material as any).needsUpdate = true;
-            },
-            undefined,
-            () => {}
-          );
-        }
-      });
-    }
-
-    function startWithAlbum(all: Item[]) {
-      const THREE = (window as any).THREE;
-      if (!THREE || !mount || cancelled) return;
-
-      const images = all.filter((x) => x.type !== 'video');
-      const videos = all.filter((x) => x.type === 'video');
-      if (!images.length && !videos.length) return;
-
-      let width = mount.clientWidth || window.innerWidth;
-      let height = mount.clientHeight || 480;
-
-      const scene = new THREE.Scene();
-      const camera = new THREE.PerspectiveCamera(55, width / height, 0.1, 200);
-
-      renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-      renderer.setSize(width, height);
-      mount.appendChild(renderer.domElement);
-
-      const imageSpin = new THREE.Group();
-      const videoTiltGroup = new THREE.Group();
-      const videoSpin = new THREE.Group();
-      videoTiltGroup.rotation.x = 0.18;
-      videoTiltGroup.rotation.z = -0.06;
-      videoTiltGroup.add(videoSpin);
-      scene.add(imageSpin);
-      scene.add(videoTiltGroup);
-
-      const nImg = Math.max(images.length, 1);
-      const r1 = Math.max(3.0, nImg * 0.5);
-      camera.position.set(0, 0, r1 + 3.4);
-      camera.lookAt(0, 0, 0);
-
-      // Vòng trong: ảnh (view chính, hướng ra ngoài như hiện tại)
-      if (images.length) addRing(THREE, imageSpin, images, r1, 1.9, false);
-
-      // Vòng ngoài: video có group nghiêng riêng, còn spin group quay quanh trục của chính vòng video.
-      if (videos.length) {
-        const r2 = Math.max(r1 + 6, videos.length * 0.85, r1 * 1.8);
-        addRing(THREE, videoSpin, videos, r2, 7.2, true);
-      }
-
-      let targetRot = 0;
-      let curRot = 0;
-      let dragging = false;
-      let lastX = 0;
-      let lastInteract = Date.now();
-
-      const el = renderer.domElement as HTMLCanvasElement;
-      const onDown = (x: number) => { dragging = true; lastX = x; lastInteract = Date.now(); };
-      const onMove = (x: number) => {
-        if (!dragging) return;
-        targetRot += (x - lastX) * 0.005;
-        lastX = x;
-        lastInteract = Date.now();
-      };
-      const onUp = () => { dragging = false; };
-      const md = (e: MouseEvent) => onDown(e.clientX);
-      const mm = (e: MouseEvent) => onMove(e.clientX);
-      const mu = () => onUp();
-      const td = (e: TouchEvent) => onDown(e.touches[0].clientX);
-      const tm = (e: TouchEvent) => onMove(e.touches[0].clientX);
-      const tu = () => onUp();
-      el.addEventListener('mousedown', md);
-      window.addEventListener('mousemove', mm);
-      window.addEventListener('mouseup', mu);
-      el.addEventListener('touchstart', td, { passive: true });
-      el.addEventListener('touchmove', tm, { passive: true });
-      el.addEventListener('touchend', tu);
-      cleanupPointer = () => {
-        el.removeEventListener('mousedown', md);
-        window.removeEventListener('mousemove', mm);
-        window.removeEventListener('mouseup', mu);
-        el.removeEventListener('touchstart', td);
-        el.removeEventListener('touchmove', tm);
-        el.removeEventListener('touchend', tu);
-      };
-
-      const animate = () => {
-        if (!dragging && Date.now() - lastInteract > 1200) targetRot += 0.0016;
-        curRot += (targetRot - curRot) * 0.08;
-        imageSpin.rotation.y = curRot;
-        videoSpin.rotation.y = curRot;
-        renderer.render(scene, camera);
-        frameId = requestAnimationFrame(animate);
-      };
-      animate();
-
-      onResize = () => {
-        if (!mount) return;
-        width = mount.clientWidth || window.innerWidth;
-        height = mount.clientHeight || 480;
-        camera.aspect = width / height;
-        camera.updateProjectionMatrix();
-        renderer.setSize(width, height);
-      };
-      window.addEventListener('resize', onResize);
-    }
-
-    function ensureThree(cb: () => void) {
-      if ((window as any).THREE) return cb();
-      let script = document.querySelector('script[data-three]') as HTMLScriptElement | null;
-      if (!script) {
-        script = document.createElement('script');
-        script.src = SRC;
-        script.setAttribute('data-three', 'true');
-        document.body.appendChild(script);
-      }
-      script.addEventListener('load', cb);
-    }
-
-    fetch('/album')
-      .then((r) => r.json())
-      .then((all: Item[]) => ensureThree(() => startWithAlbum(Array.isArray(all) ? all : [])))
-      .catch(() => ensureThree(() => startWithAlbum([])));
-
-    return () => {
-      cancelled = true;
-      if (frameId) cancelAnimationFrame(frameId);
-      if (onResize) window.removeEventListener('resize', onResize);
-      if (cleanupPointer) cleanupPointer();
-      videoEls.forEach((v) => { try { v.pause(); v.src = ''; } catch {} });
-      if (renderer && mount && renderer.domElement.parentNode === mount) {
-        mount.removeChild(renderer.domElement);
-        renderer.dispose();
-      }
-    };
-  }, []);
-
-  const inputStyle: React.CSSProperties = {
-    width: '100%',
-    padding: '10px 12px',
-    borderRadius: 8,
-    border: '1px solid rgba(255,255,255,0.15)',
-    background: 'rgba(255,255,255,0.06)',
-    color: '#e8edf5',
-    fontSize: 14,
-    marginTop: 8,
-    boxSizing: 'border-box',
-  };
-  const controlButtonStyle: React.CSSProperties = {
-    padding: '10px 16px',
-    borderRadius: 999,
-    border: '1px solid rgba(255,255,255,0.15)',
-    background: 'rgba(255,255,255,0.08)',
-    color: '#e8edf5',
-    fontSize: 14,
-    fontWeight: 600,
-    cursor: 'pointer',
-    backdropFilter: 'blur(8px)',
-    width: '100%',
-  };
-  const panelStyle: React.CSSProperties = {
-    position: 'absolute',
-    top: music ? 158 : 110,
-    right: 18,
-    width: 300,
-    padding: 16,
-    borderRadius: 14,
-    border: '1px solid rgba(255,255,255,0.12)',
-    background: 'rgba(17,23,38,0.96)',
-    boxShadow: '0 12px 40px rgba(0,0,0,0.5)',
-    textAlign: 'left',
-    zIndex: 10,
-  };
-  const musicSrc = music
-    ? `${music.embedUrl}?autoplay=1&loop=1&playlist=${encodeURIComponent(music.youtubeId)}&controls=0&modestbranding=1&rel=0&playsinline=1`
-    : '';
+  const okCount = rows.filter((r) => r.status === 'ok').length;
 
   return (
     <main
       style={{
-        position: 'relative',
         minHeight: '100vh',
         margin: 0,
-        background: 'radial-gradient(1200px circle at 50% -10%, #1e293b, #0b0f17 60%)',
+        background: 'radial-gradient(1000px circle at 50% -10%, #1e293b, #0b0f17 60%)',
         color: '#e8edf5',
         fontFamily: 'system-ui, -apple-system, sans-serif',
         display: 'flex',
         flexDirection: 'column',
         alignItems: 'center',
-        padding: '40px 16px',
-        textAlign: 'center',
+        justifyContent: 'center',
+        padding: 24,
       }}
     >
-      {musicPlaying && musicSrc && (
-        <iframe
-          allow="autoplay; encrypted-media"
-          key={musicAttemptKey}
-          src={musicSrc}
-          style={{
-            border: 0,
-            height: 1,
-            opacity: 0.01,
-            pointerEvents: 'none',
-            position: 'absolute',
-            width: 1,
-          }}
-          title="Nhạc nền"
-        />
-      )}
-
       <div
         style={{
-          position: 'absolute',
-          top: 18,
-          right: 18,
-          display: 'grid',
-          gap: 8,
-          width: 164,
-          zIndex: 11,
+          width: 'min(440px, 94vw)',
+          background: 'rgba(255,255,255,0.04)',
+          border: '1px solid rgba(255,255,255,0.10)',
+          borderRadius: 18,
+          padding: 26,
+          boxShadow: '0 20px 60px rgba(0,0,0,0.4)',
         }}
       >
-        <button
-          onClick={() => {
-            setPanelOpen((v) => !v);
-            setMusicPanelOpen(false);
-            setStatus('');
+        <h1 style={{ fontSize: 22, fontWeight: 800, margin: '0 0 4px' }}>Tải ảnh / video lên album</h1>
+        <p style={{ color: '#9aa6b8', fontSize: 13, lineHeight: 1.5, margin: '0 0 18px' }}>
+          Nhập mật khẩu rồi chọn tệp. Ảnh iPhone (HEIC) sẽ tự đổi sang JPEG. Tối đa 50MB mỗi tệp.
+        </p>
+
+        <input
+          type="password"
+          placeholder="Mật khẩu upload"
+          value={passcode}
+          onChange={(e) => setPasscode(e.target.value)}
+          style={{
+            width: '100%',
+            padding: '11px 13px',
+            fontSize: 14,
+            borderRadius: 10,
+            border: '1px solid rgba(255,255,255,0.16)',
+            background: 'rgba(255,255,255,0.06)',
+            color: '#fff',
+            outline: 'none',
+            marginBottom: 12,
+            boxSizing: 'border-box',
           }}
-          style={controlButtonStyle}
-        >
-          ＋ Tải ảnh / video
-        </button>
-        <button
-          onClick={() => {
-            setMusicPanelOpen((v) => !v);
-            setPanelOpen(false);
-            setMusicStatus('');
+        />
+
+        <input
+          ref={inputRef}
+          type="file"
+          multiple
+          accept="image/*,video/*,.heic,.heif"
+          disabled={busy}
+          onChange={(e) => handleFiles(e.target.files)}
+          style={{ display: 'none' }}
+          id="filepick"
+        />
+        <label
+          htmlFor="filepick"
+          style={{
+            display: 'block',
+            textAlign: 'center',
+            padding: '12px',
+            borderRadius: 10,
+            background: busy ? '#334155' : '#6366f1',
+            color: '#fff',
+            fontWeight: 700,
+            fontSize: 14,
+            cursor: busy ? 'default' : 'pointer',
           }}
-          style={controlButtonStyle}
         >
-          ♪ Thêm nhạc
-        </button>
-        {music && (
-          <button
-            onClick={() => setMusicPlaying((v) => !v)}
-            style={{
-              ...controlButtonStyle,
-              background: musicPlaying ? 'rgba(34,211,238,0.18)' : 'rgba(255,255,255,0.08)',
-            }}
-          >
-            {musicPlaying ? 'Tắt nhạc' : 'Bật nhạc'}
-          </button>
+          {busy ? 'Đang tải lên…' : '＋ Chọn ảnh / video'}
+        </label>
+
+        {rows.length > 0 && (
+          <div style={{ marginTop: 16, fontSize: 13 }}>
+            {okCount > 0 && (
+              <div style={{ color: '#7fe6c8', marginBottom: 8 }}>Đã lên: {okCount}/{rows.length}</div>
+            )}
+            {rows.map((r) => (
+              <div
+                key={r.name}
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  gap: 10,
+                  padding: '6px 0',
+                  borderTop: '1px solid rgba(255,255,255,0.06)',
+                }}
+              >
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {r.name}
+                </span>
+                <span
+                  style={{
+                    flexShrink: 0,
+                    color: r.status === 'ok' ? '#7fe6c8' : r.status === 'error' ? '#ff9a8a' : '#9aa6b8',
+                  }}
+                  title={r.msg}
+                >
+                  {r.status === 'ok' ? '✓' : r.status === 'error' ? '✕ ' + (r.msg || '') : '…'}
+                </span>
+              </div>
+            ))}
+          </div>
         )}
       </div>
 
-      {panelOpen && (
-        <div style={panelStyle}>
-          <div style={{ fontWeight: 700, fontSize: 15 }}>Tải lên album</div>
-          <div style={{ fontSize: 12, color: '#9aa6b8', marginTop: 4 }}>
-            Chọn nhiều tệp được. Ảnh iPhone (HEIC) sẽ tự đổi sang JPG. Video (.mp4/.mov) vào vòng ngoài.
-          </div>
-          <input
-            type="password"
-            placeholder="Mật khẩu"
-            value={passcode}
-            onChange={(e) => setPasscode(e.target.value)}
-            style={inputStyle}
-          />
-          <input
-            type="file"
-            accept="image/*,video/mp4,video/quicktime,video/webm,.mp4,.mov,.webm,.m4v,.ogv,.heic,.heif,.pvt"
-            multiple
-            onChange={(e) => setFiles(e.target.files ? Array.from(e.target.files) : [])}
-            style={{ ...inputStyle, padding: '8px' }}
-          />
-          {files.length > 0 && (
-            <div style={{ fontSize: 12, color: '#9aa6b8', marginTop: 6 }}>
-              Đã chọn {files.length} tệp
-            </div>
-          )}
-          <button
-            onClick={doUpload}
-            disabled={busy}
-            style={{
-              width: '100%',
-              marginTop: 12,
-              padding: '10px 12px',
-              borderRadius: 8,
-              border: 'none',
-              background: busy ? '#3730a3' : 'linear-gradient(90deg,#6366f1,#22d3ee)',
-              color: '#06121a',
-              fontWeight: 700,
-              fontSize: 14,
-              cursor: busy ? 'default' : 'pointer',
-            }}
-          >
-            {busy ? 'Đang tải...' : 'Tải lên'}
-          </button>
-          {status && (
-            <div style={{ marginTop: 10, fontSize: 12, color: '#9aa6b8', wordBreak: 'break-word' }}>{status}</div>
-          )}
-        </div>
-      )}
-
-      {musicPanelOpen && (
-        <div style={panelStyle}>
-          <div style={{ fontWeight: 700, fontSize: 15 }}>Nhạc nền</div>
-          <div style={{ fontSize: 12, color: '#9aa6b8', marginTop: 4 }}>
-            Dán link YouTube để dùng làm nhạc nền cho album.
-          </div>
-          <input
-            type="password"
-            placeholder="Mật khẩu"
-            value={passcode}
-            onChange={(e) => setPasscode(e.target.value)}
-            style={inputStyle}
-          />
-          <input
-            type="url"
-            placeholder="https://youtu.be/..."
-            value={musicUrl}
-            onChange={(e) => setMusicUrl(e.target.value)}
-            style={inputStyle}
-          />
-          <button
-            onClick={doSaveMusic}
-            disabled={musicBusy}
-            style={{
-              width: '100%',
-              marginTop: 12,
-              padding: '10px 12px',
-              borderRadius: 8,
-              border: 'none',
-              background: musicBusy ? '#3730a3' : 'linear-gradient(90deg,#22d3ee,#a78bfa)',
-              color: '#06121a',
-              fontWeight: 700,
-              fontSize: 14,
-              cursor: musicBusy ? 'default' : 'pointer',
-            }}
-          >
-            {musicBusy ? 'Đang lưu...' : 'Lưu nhạc'}
-          </button>
-          {music && (
-            <button
-              onClick={() => setMusicPlaying((v) => !v)}
-              style={{
-                ...inputStyle,
-                border: '1px solid rgba(34,211,238,0.35)',
-                color: '#e8edf5',
-                cursor: 'pointer',
-                fontWeight: 700,
-              }}
-            >
-              {musicPlaying ? 'Tắt nhạc' : 'Bật nhạc'}
-            </button>
-          )}
-          {musicStatus && (
-            <div style={{ marginTop: 10, fontSize: 12, color: '#9aa6b8', wordBreak: 'break-word' }}>
-              {musicStatus}
-            </div>
-          )}
-        </div>
-      )}
-
-      <div
-        style={{
-          display: 'inline-flex',
-          alignItems: 'center',
-          gap: 8,
-          padding: '6px 14px',
-          borderRadius: 999,
-          border: '1px solid rgba(255,255,255,0.12)',
-          fontSize: 13,
-          color: '#9aa6b8',
-          marginBottom: 14,
-        }}
-      >
-        Album 3D • ảnh (vòng trong) + video (vòng ngoài)
-      </div>
-      <h1 style={{ fontSize: 'clamp(28px, 5vw, 44px)', fontWeight: 800, margin: '0 0 6px' }}>
-        Album ảnh của tôi
-      </h1>
-      <p style={{ color: '#9aa6b8', maxWidth: 580, margin: '0 0 8px' }}>
-        Kéo để xoay. Ảnh ở vòng trong, video chạy ở vòng ngoài phía sau.
+      <p style={{ color: '#64748b', fontSize: 11, marginTop: 16 }}>
+        Vũ Đức An · upload riêng tư
       </p>
-
-      <div
-        ref={mountRef}
-        style={{ width: 'min(1040px, 98vw)', height: '74vh', minHeight: 440, cursor: 'grab' }}
-      />
     </main>
   );
 }
